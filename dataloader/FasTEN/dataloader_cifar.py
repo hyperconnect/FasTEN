@@ -1,12 +1,10 @@
-import json
-import os
 import random
 
 import numpy as np
+import torch
 import torchvision.transforms as transforms
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
-import torch
 
 
 def worker_init_fn(worker_id):
@@ -21,8 +19,8 @@ def unpickle(file):
 
 
 class cifar_dataset(Dataset):
-    def __init__(self, dataset, r, noise_mode, root_dir, transform, mode,
-                 clean=False, num_clean=1000, num_valid=5000):
+    def __init__(self, dataset, r, noise_mode, data_dir, transform, mode,
+                 clean=False, num_clean=1000, num_valid=5000, data_idx=None):
 
         self.r = r  # noise ratio
         self.transform = transform
@@ -37,7 +35,7 @@ class cifar_dataset(Dataset):
         # test
         if self.mode == 'test':
             if dataset == 'cifar10':
-                test_dic = unpickle('%s/test_batch' % root_dir)
+                test_dic = unpickle('%s/test_batch' % data_dir)
                 self.test_data = test_dic['data']
                 self.test_data = self.test_data.reshape((10000, 3, 32, 32))
                 self.test_data = self.test_data.transpose((0, 2, 3, 1))
@@ -45,7 +43,7 @@ class cifar_dataset(Dataset):
                 self.num_classes = 10
 
             elif dataset == 'cifar100':
-                test_dic = unpickle('%s/test' % root_dir)
+                test_dic = unpickle('%s/test' % data_dir)
                 self.test_data = test_dic['data']
                 self.test_data = self.test_data.reshape((10000, 3, 32, 32))
                 self.test_data = self.test_data.transpose((0, 2, 3, 1))
@@ -60,7 +58,7 @@ class cifar_dataset(Dataset):
             # load dataset
             if dataset == 'cifar10':
                 for n in range(1, 6):
-                    dpath = '%s/data_batch_%d' % (root_dir, n)
+                    dpath = '%s/data_batch_%d' % (data_dir, n)
                     data_dic = unpickle(dpath)
                     train_data.append(data_dic['data'])
                     train_label = train_label + data_dic['labels']
@@ -70,7 +68,7 @@ class cifar_dataset(Dataset):
                 self.num_classes = 10
 
             elif dataset == 'cifar100':
-                train_dic = unpickle('%s/train' % root_dir)
+                train_dic = unpickle('%s/train' % data_dir)
                 train_data = train_dic['data']
                 train_label = train_dic['fine_labels']
                 train_coarse_label = train_dic['coarse_labels']
@@ -81,28 +79,31 @@ class cifar_dataset(Dataset):
             train_data = train_data.reshape((50000, 3, 32, 32))
             train_data = train_data.transpose((0, 2, 3, 1))
 
-            self.idx_to_meta = []
-            self.idx_to_train = []
-            self.idx_to_valid = []
+            if data_idx is None:
+                self.idx_to_meta = []
+                self.idx_to_train = []
+                self.idx_to_valid = []
 
-            data_list_val = {}
-            for j in range(self.num_classes):
-                data_list_val[j] = [i for i, label in enumerate(train_label) if label == j]
+                data_list_val = {}
+                for j in range(self.num_classes):
+                    data_list_val[j] = [i for i, label in enumerate(train_label) if label == j]
 
-            for cls_idx, img_id_list in data_list_val.items():
-                np.random.shuffle(img_id_list)
-                num_meta = img_num_list_meta[int(cls_idx)]
-                num_val = img_num_list_val[int(cls_idx)]
-                self.idx_to_meta.extend(img_id_list[:num_meta])
-                self.idx_to_train.extend(img_id_list[num_meta:-num_val])
-                self.idx_to_valid.extend(img_id_list[-num_val:])
+                for cls_idx, img_id_list in data_list_val.items():
+                    np.random.shuffle(img_id_list)
+                    num_meta = img_num_list_meta[int(cls_idx)]
+                    num_val = img_num_list_val[int(cls_idx)]
+                    self.idx_to_meta.extend(img_id_list[:num_meta])
+                    self.idx_to_train.extend(img_id_list[num_meta:-num_val])
+                    self.idx_to_valid.extend(img_id_list[-num_val:])
 
-            if mode == "train_noisy":
-                self.data_idx = self.idx_to_train
-            elif mode == "train_clean":
-                self.data_idx = self.idx_to_meta
-            elif mode == "valid":
-                self.data_idx = self.idx_to_valid
+                if mode == "train_noisy":
+                    self.data_idx = self.idx_to_train
+                elif mode == "train_clean":
+                    self.data_idx = self.idx_to_meta
+                elif mode == "valid":
+                    self.data_idx = self.idx_to_valid
+            else:
+                self.data_idx = data_idx
 
             self.train_data = train_data[self.data_idx]
             self.train_label = list(np.array(train_label)[self.data_idx])
@@ -192,13 +193,13 @@ class cifar_dataset(Dataset):
 
 
 class cifar_dataloader():
-    def __init__(self, dataset, r, noise_mode, batch_size, num_workers, root_dir):
+    def __init__(self, dataset, r, noise_mode, batch_size, num_workers, data_dir):
         self.dataset = dataset
         self.r = r
         self.noise_mode = noise_mode
         self.batch_size = batch_size
         self.num_workers = num_workers
-        self.root_dir = root_dir
+        self.data_dir = data_dir
         self.idx_to_meta = None
 
         if self.dataset == 'cifar10':
@@ -233,7 +234,7 @@ class cifar_dataloader():
                 dataset=self.dataset,
                 clean=False, num_clean=args.num_clean,
                 noise_mode=self.noise_mode,
-                r=self.r, root_dir=self.root_dir,
+                r=self.r, data_dir=self.data_dir,
                 transform=self.transform_train,
                 mode="train_noisy",
             )
@@ -241,9 +242,10 @@ class cifar_dataloader():
                 dataset=self.dataset,
                 clean=True, num_clean=args.num_clean,
                 noise_mode=self.noise_mode,
-                r=self.r, root_dir=self.root_dir,
+                r=self.r, data_dir=self.data_dir,
                 transform=self.transform_train,
                 mode="train_clean",
+                data_idx=noisy_dataset.idx_to_meta,
             )
             trainloader = DataLoader(
                 dataset=noisy_dataset,
@@ -269,9 +271,10 @@ class cifar_dataloader():
                     dataset=self.dataset,
                     clean=True, num_clean=args.num_clean,
                     noise_mode=self.noise_mode,
-                    r=self.r, root_dir=self.root_dir,
+                    r=self.r, data_dir=self.data_dir,
                     transform=self.transform_test,
                     mode="valid",
+                    data_idx=noisy_dataset.idx_to_valid,
                 )
                 validloader = DataLoader(
                     dataset=valid_dataset,
@@ -288,7 +291,7 @@ class cifar_dataloader():
                 dataset=self.dataset,
                 noise_mode=self.noise_mode,
                 r=self.r,
-                root_dir=self.root_dir,
+                data_dir=self.data_dir,
                 transform=self.transform_test,
                 mode='test'
             )
@@ -305,7 +308,7 @@ class cifar_dataloader():
                 dataset=self.dataset,
                 clean=True, num_clean=args.num_clean,
                 noise_mode=self.noise_mode,
-                r=self.r, root_dir=self.root_dir,
+                r=self.r, data_dir=self.data_dir,
                 transform=self.transform_train,
                 mode="train_clean",
             )

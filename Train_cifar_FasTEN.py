@@ -8,36 +8,46 @@ from pathlib import Path
 
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
-from thop import profile
-import numpy as np
 
 from dataloader.FasTEN import dataloader_cifar as dataloader
+from dataloader.downloader_cifar import CifarDownloader
 from model.cifar.ResNet import *
-from utils.tensorboard import TensorboardWriter
 from utils.value_aggregator import *
 
 parser = argparse.ArgumentParser(description='PyTorch CIFAR Training')
-parser.add_argument('--batch_size', default=100, type=int, help='train batchsize')
-parser.add_argument('--lr', default=0.1, type=float, help='initial learning rate')
-parser.add_argument('--noise_mode', default='sym')
-parser.add_argument('--num_epochs', default=70, type=int)
-parser.add_argument('--r', default=0.2, type=float, help='noise ratio')
-parser.add_argument('--lambda_n', default=0.5, type=float, help='noisy loss weight')
+# Method
+parser.add_argument('--method', default='FasTEN', type=str)
+parser.add_argument('--use_correction', default=True, type=bool, help='Use correction.')
 parser.add_argument('--thres_upper', default=0.80, type=float, help='threshold')
-parser.add_argument('--id', default='')
-parser.add_argument('--seed', default=123)
-parser.add_argument('--gpuid', default=3, type=int)
-parser.add_argument('--prefetch', default=0, type=int)
+parser.add_argument('--lambda_n', default=0.5, type=float, help='noisy loss weight')
+# Dataset
+parser.add_argument('--dataset', default='cifar10', type=str)
 parser.add_argument('--num_clean', default=1000, type=int)
 parser.add_argument('--nPerImage', default=10, type=int)
 parser.add_argument('--use_valid', default=True, type=bool, help='Use validation set for training.')
-parser.add_argument('--resume', default=False, type=bool, help='Resume from checkpoint.')
-parser.add_argument('--data_path', default='/nas/dataset/public/cifar/cifar10', type=str, help='path to dataset')
-parser.add_argument('--dataset', default='cifar10', type=str)
-parser.add_argument('--method', default='FasTEN', type=str)
+parser.add_argument('--root_path', default='nas/workspace/harris/public/cifar', type=str, help='path to dataset')
+# Optimization
+parser.add_argument('--batch_size', default=100, type=int, help='train batchsize')
+parser.add_argument('--lr', default=0.1, type=float, help='initial learning rate')
+parser.add_argument('--num_epochs', default=70, type=int)
+# Noise setting
+parser.add_argument('--noise_mode', default='sym')
+parser.add_argument('--r', default=0.2, type=float, help='noise ratio')
+# Etc.
+parser.add_argument('--id', default='')
+parser.add_argument('--seed', default=123)
+parser.add_argument('--gpuid', default=0, type=int)
+parser.add_argument('--prefetch', default=0, type=int)
 parser.add_argument('--exp', default='exp_test', type=str)
 args = parser.parse_args()
-args.num_classes = {"cifar10": 10, "cifar100": 100}[args.dataset]
+args.num_classes = {
+    "cifar10": 10,
+    "cifar100": 100
+}[args.dataset]
+args.data_path = {
+    "cifar10": f"{args.root_path}/cifar-10-batches-py",
+    "cifar100": f"{args.root_path}/cifar-100-python"
+}[args.dataset]
 print(args)
 
 torch.cuda.set_device(args.gpuid)
@@ -82,19 +92,20 @@ def train(epoch, net, optimizer, trainloader, trainloader_c, args):
         y_noisy_c, y_clean_c = net(input_clean)
         pre1 = torch.softmax(y_clean_n, dim=1)  # p(y|x)
 
-        # Apply cleansing
-        thres_upper = args.thres_upper
-        max_prob, relabel = torch.max(pre1, dim=1)
+        if args.use_correction:
+            # Apply cleansing
+            thres_upper = args.thres_upper
+            max_prob, relabel = torch.max(pre1, dim=1)
 
-        corrected_inst = max_prob.ge(thres_upper)
-        # Get new label
-        new_label = (~corrected_inst) * label_noisy + corrected_inst * relabel
-        # Get noisy label from prev relabels
-        label_noisy = torch.tensor(relabels[index]).cuda()
+            corrected_inst = max_prob.ge(thres_upper)
+            # Get new label
+            new_label = (~corrected_inst) * label_noisy + corrected_inst * relabel
+            # Get noisy label from prev relabels
+            label_noisy = torch.tensor(relabels[index]).cuda()
 
-        # Label correction
-        new_label_cpu = new_label.cpu().detach().numpy()
-        relabels[index] = new_label_cpu.tolist()
+            # Label correction
+            new_label_cpu = new_label.cpu().detach().numpy()
+            relabels[index] = new_label_cpu.tolist()
 
         # Estimate transition matrix
         prob_noisy_c = torch.softmax(y_noisy_c, dim=1)
@@ -102,8 +113,8 @@ def train(epoch, net, optimizer, trainloader, trainloader_c, args):
         c_hat = c_hat.detach()
         c_hat_transpose = (c_hat).T
 
-        _c_hat_transpose = c_hat_transpose[label_noisy]   # p(y_hat=j|y, x)
-        pre1 = torch.softmax(y_clean_n, dim=1)            # p(y|x)
+        _c_hat_transpose = c_hat_transpose[label_noisy]  # p(y_hat=j|y, x)
+        pre1 = torch.softmax(y_clean_n, dim=1)  # p(y|x)
         pre2 = torch.sum(_c_hat_transpose * pre1, dim=1)  # p(y_hat=j|x) = sum_y[p(y_hat=j|y,x) * p(y|x)]
 
         eps = 1e-7
@@ -198,8 +209,11 @@ if __name__ == '__main__':
 
     test_log = open(f'{save_dir}/%s_%.1f_%s' % (args.dataset, args.r, args.noise_mode) + '_acc.txt', 'w')
 
+    cifar_downloader = CifarDownloader(args.root_path, dataset=args.dataset)
+    cifar_downloader.download()
+
     loader = dataloader.cifar_dataloader(args.dataset, r=args.r, noise_mode=args.noise_mode, batch_size=args.batch_size,
-                                         num_workers=0, root_dir=args.data_path)
+                                         num_workers=0, data_dir=args.data_path)
 
     print('| Building net')
     net = create_model()

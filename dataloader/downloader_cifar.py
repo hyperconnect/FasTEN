@@ -24,7 +24,7 @@ class CifarDownloader(object):
                 ['test_batch', '40351d587109b95175f43aff81a1287e'],
             ]
         elif dataset == 'cifar100':
-            base_folder = 'cifar-100-python'
+            self.base_folder = 'cifar-100-python'
             self.url = "http://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz"
             self.filename = "cifar-100-python.tar.gz"
             self.tgz_md5 = 'eb9058c3a382ffc7106e4002c42a8d85'

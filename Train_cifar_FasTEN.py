@@ -21,9 +21,8 @@ parser.add_argument('--use_correction', default=True, type=bool, help='Use corre
 parser.add_argument('--thres_upper', default=0.80, type=float, help='threshold')
 parser.add_argument('--lambda_n', default=0.5, type=float, help='noisy loss weight')
 # Dataset
-parser.add_argument('--dataset', default='cifar10', type=str)
+parser.add_argument('--dataset', default='cifar100', type=str)
 parser.add_argument('--num_clean', default=1000, type=int)
-parser.add_argument('--nPerImage', default=10, type=int)
 parser.add_argument('--use_valid', default=True, type=bool, help='Use validation set for training.')
 parser.add_argument('--root_path', default='nas/workspace/harris/public/cifar', type=str, help='path to dataset')
 # Optimization
@@ -47,6 +46,10 @@ args.num_classes = {
 args.data_path = {
     "cifar10": f"{args.root_path}/cifar-10-batches-py",
     "cifar100": f"{args.root_path}/cifar-100-python"
+}[args.dataset]
+args.nPerImage = {
+    "cifar10": 10,
+    "cifar100": 1,
 }[args.dataset]
 print(args)
 
